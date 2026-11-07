@@ -1,0 +1,27 @@
+FROM oven/bun:1.3.12-debian AS base
+WORKDIR /workspace
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
+
+FROM base AS base_with_deps
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile
+
+FROM base AS dev
+ENV NODE_ENV=development
+CMD ["sh", "-c", "bun install && bun --bun run dev --host 0.0.0.0"]
+
+FROM base_with_deps AS release_builder
+COPY . .
+ARG VITE_BACKEND_URL=https://api.myrtle.moe
+ARG VITE_SITE_URL=https://myrtle.moe
+ENV SKIP_ENV_VALIDATION=true
+ENV NODE_ENV=production
+RUN bun --bun run build
+
+FROM oven/bun:1.3.12-debian AS release
+WORKDIR /app
+ENV NODE_ENV=production
+ENV PORT=3000
+ENV HOST=0.0.0.0
+COPY --from=release_builder /workspace/.output /app/.output
+CMD ["bun", "/app/.output/server/index.mjs"]

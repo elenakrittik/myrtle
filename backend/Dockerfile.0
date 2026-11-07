@@ -1,0 +1,25 @@
+FROM rust:1-bookworm AS base
+WORKDIR /workspace
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libssl-dev libpq-dev && rm -rf /var/lib/apt/lists/*
+
+FROM base AS dev_builder
+RUN rustup component add clippy
+RUN cargo install cargo-watch
+
+FROM dev_builder AS dev
+CMD ["cargo", "watch", "-x", "run --bin backend", "-w", "src", "-w", "Cargo.toml"]
+
+FROM base AS release_builder
+COPY . .
+RUN cargo build --release --bin backend
+
+FROM debian:bookworm-slim AS release
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 libpq5 curl && rm -rf /var/lib/apt/lists/*
+COPY --from=release_builder /workspace/target/release/backend /app/backend
+CMD ["/app/backend"]
+
+FROM base AS tools
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip libcairo2-dev libpango1.0-dev python3-dev && rm -rf /var/lib/apt/lists/*
+RUN rustup component add clippy rustfmt
+CMD ["sh", "-c", "echo 'this image does not do anything on its own; specify a script or command to run'"]

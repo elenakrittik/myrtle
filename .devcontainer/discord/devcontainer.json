@@ -1,0 +1,19 @@
+{
+  "name": "myrtle · discord",
+  "dockerComposeFile": ["../../docker-compose.0.yml"],
+  "service": "discord",
+  "workspaceFolder": "/workspace",
+  "shutdownAction": "none",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml"
+      ],
+      "settings": {
+        "rust-analyzer.cargo.targetDir": true
+      }
+    }
+  },
+  "postCreateCommand": "cargo fetch"
+}

@@ -1,0 +1,71 @@
+ARG BUILDER_STAGE=dev_builder
+
+FROM oven/bun:1.3.12-debian AS bun
+
+FROM rust:1-bookworm AS base
+WORKDIR /workspace
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libssl-dev python3-dev git ca-certificates build-essential unzip && rm -rf /var/lib/apt/lists/*
+COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
+RUN curl -LO https://github.com/google/flatbuffers/releases/download/v25.12.19/Linux.flatc.binary.g++-13.zip \
+    && unzip Linux.flatc.binary.g++-13.zip -d /usr/local/bin/ \
+    && chmod +x /usr/local/bin/flatc \
+    && rm Linux.flatc.binary.g++-13.zip
+
+FROM base AS release_builder
+COPY . .
+RUN bun install --frozen-lockfile
+RUN --mount=type=cache,target=/workspace/downloader/target \
+    --mount=type=cache,target=/usr/local/cargo/registry \
+    cd downloader && cargo build --release \
+    && cp target/release/downloader /workspace/downloader-bin
+RUN --mount=type=cache,target=/workspace/unpacker/target \
+    --mount=type=cache,target=/usr/local/cargo/registry \
+    cd unpacker && cargo build --release \
+    && cp target/release/unpacker /workspace/unpacker-bin
+RUN --mount=type=cache,target=/workspace/unpacker/target \
+    --mount=type=cache,target=/usr/local/cargo/registry \
+    cd unpacker && cargo build --release --bin generate-fbs \
+    && cp target/release/generate-fbs /workspace/generate-fbs-bin
+
+FROM base AS dev_builder
+COPY . .
+RUN bun install --frozen-lockfile
+RUN --mount=type=cache,target=/workspace/downloader/target \
+    --mount=type=cache,target=/usr/local/cargo/registry \
+    cd downloader && cargo build \
+    && cp target/debug/downloader /workspace/downloader-bin
+RUN --mount=type=cache,target=/workspace/unpacker/target \
+    --mount=type=cache,target=/usr/local/cargo/registry \
+    cd unpacker && cargo build \
+    && cp target/debug/unpacker /workspace/unpacker-bin
+RUN --mount=type=cache,target=/workspace/unpacker/target \
+    --mount=type=cache,target=/usr/local/cargo/registry \
+    cd unpacker && cargo build --bin generate-fbs \
+    && cp target/debug/generate-fbs /workspace/generate-fbs-bin
+
+FROM ${BUILDER_STAGE} AS builder
+
+FROM bun AS runner
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 git && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /usr/local/bin/flatc /usr/local/bin/flatc
+# ensure the ability to run the container's tools manually
+COPY --from=builder /workspace/downloader-bin /usr/local/bin/downloader
+COPY --from=builder /workspace/unpacker-bin /usr/local/bin/unpacker
+COPY --from=builder /workspace/generate-fbs-bin /usr/local/bin/generate-fbs
+COPY --from=builder /workspace/download.sh /workspace/unpack.sh /workspace/generate_fbs.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/download.sh /usr/local/bin/unpack.sh /usr/local/bin/generate_fbs.sh
+# ensure the asset watcher itself has the tools available
+COPY --from=builder /workspace/run.mjs /app/run.mjs
+COPY --from=builder /workspace/orphans.mjs /app/orphans.mjs
+COPY --from=builder /workspace/package.json /app/package.json
+COPY --from=builder /workspace/node_modules /app/node_modules
+RUN mkdir -p binaries && \
+    cp /usr/local/bin/downloader binaries/downloader && \
+    cp /usr/local/bin/unpacker binaries/unpacker
+# --
+RUN mkdir -p /data/ArkAssets /data/output
+CMD ["sh", "-c", "echo 'this image does not do anything on its own; specify a script or command to run'"]
+
+FROM dev_builder AS dev_env
+RUN rustup component add rustfmt clippy

@@ -1,0 +1,23 @@
+{
+  "name": "myrtle · frontend",
+  "dockerComposeFile": ["../../docker-compose.0.yml"],
+  "service": "frontend",
+  "workspaceFolder": "/workspace",
+  "shutdownAction": "none",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "biomejs.biome",
+        "bradlc.vscode-tailwindcss",
+        "ms-vscode.vscode-typescript-next"
+      ],
+      "settings": {
+        "editor.defaultFormatter": "biomejs.biome",
+        "editor.formatOnSave": true,
+        "[typescript]": { "editor.defaultFormatter": "biomejs.biome" },
+        "[typescriptreact]": { "editor.defaultFormatter": "biomejs.biome" }
+      }
+    }
+  },
+  "postCreateCommand": "bun install"
+}

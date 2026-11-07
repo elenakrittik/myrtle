@@ -1,0 +1,19 @@
+{
+  "name": "myrtle - assets",
+  "dockerComposeFile": ["../../docker-compose.0.yml"],
+  "service": "asset-tools",
+  "workspaceFolder": "/workspace",
+  "shutdownAction": "none",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml"
+      ],
+      "settings": {
+        "rust-analyzer.cargo.targetDir": true,
+        "rust-analyzer.check.command": "clippy"
+      }
+    }
+  }
+}

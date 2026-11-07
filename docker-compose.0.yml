@@ -1,0 +1,218 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    env_file: .env
+    volumes: [postgres_data:/var/lib/postgresql]
+    ports: [127.0.0.1:5432:5432]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+      start_interval: 5s
+    profiles: [infra, all_runtime]
+    networks: [myrtle]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    volumes: [redis_data:/data]
+    ports: [127.0.0.1:6379:6379]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+      start_interval: 5s
+    profiles: [infra, all_runtime]
+    networks: [myrtle]
+
+  backend:
+    platform: linux/amd64
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.0
+      target: ${DOCKER_TARGET}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file: .env
+    volumes:
+      - ./backend:/workspace
+      - backend_target:/workspace/target
+      # The extract stays read-only; `derived/` holds what the backend itself
+      # persists (farm archive, event shops, pool details) and must be writable.
+      - ./assets/output:${ASSETS_DIR}:ro
+      - ./assets/output/en/derived:${ASSETS_DIR}/en/derived
+      - ./assets/output/cn/derived:${ASSETS_DIR}/cn/derived
+      - cargo_registry:/usr/local/cargo/registry
+    ports: [3060:3060]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://backend:3060/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+      start_interval: 5s
+    profiles: [backend, all_runtime]
+    networks: [myrtle]
+    develop:
+      watch:
+        - action: rebuild
+          path: ./backend/Dockerfile.0
+
+  frontend:
+    platform: linux/amd64
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.0
+      target: ${DOCKER_TARGET}
+      args:
+        VITE_BACKEND_URL: ${VITE_BACKEND_URL:-https://api.myrtle.moe}
+        VITE_SITE_URL: ${VITE_SITE_URL:-https://myrtle.moe}
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    env_file: .env
+    volumes:
+      - ./frontend:/workspace
+      - bun_cache:/root/.bun/install/cache
+    ports: [3000:3000]
+    profiles: [frontend, all_runtime]
+    networks: [myrtle]
+    develop:
+      watch:
+        - action: rebuild
+          path: ./frontend/Dockerfile.0
+        - action: rebuild
+          path: ./frontend/package.json
+        - action: rebuild
+          path: ./frontend/bun.lock
+
+  discord:
+    platform: linux/amd64
+    build:
+      context: ./discord
+      dockerfile: Dockerfile.0
+      target: ${DOCKER_TARGET}
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: sqlite:database.sqlite
+    volumes:
+      - ./discord:/workspace
+      - discord_target:/workspace/target
+      - cargo_registry:/usr/local/cargo/registry
+    profiles: [discord, all_runtime]
+    networks: [myrtle]
+    develop:
+      watch:
+        - action: rebuild
+          path: ./discord/Dockerfile.0
+
+  # needs manual rebuild on non-dockerfile changes
+  asset-watcher-en:
+    platform: linux/amd64
+    build:
+      context: ./assets
+      dockerfile: Dockerfile.0
+      target: runner
+      args:
+        BUILDER_STAGE: ${DOCKER_TARGET}_builder
+    restart: unless-stopped
+    volumes:
+      - ./assets/ArkAssets:/data/ArkAssets
+      - ./assets/output:${ASSETS_DIR}
+      - bun_cache:/root/.bun/install/cache
+    working_dir: /app
+    command: bun run.mjs ws --non-interactive --server en --port 9160
+    ports: [127.0.0.1:9160:9160]
+    networks: [myrtle]
+    profiles: [asset_watcher_en, all_runtime]
+    develop:
+      watch:
+        - action: rebuild
+          path: ./assets/Dockerfile.0
+
+  # needs manual rebuild on non-dockerfile changes
+  asset-watcher-cn:
+    platform: linux/amd64
+    build:
+      context: ./assets
+      dockerfile: Dockerfile.0
+      target: runner
+      args:
+        BUILDER_STAGE: ${DOCKER_TARGET}_builder
+    restart: unless-stopped
+    volumes:
+      - ./assets/ArkAssets:/data/ArkAssets
+      - ./assets/output:${ASSETS_DIR}
+      - bun_cache:/root/.bun/install/cache
+    working_dir: /app
+    command: bun run.mjs ws --non-interactive --server cn --port 9161
+    ports: [127.0.0.1:9161:9161]
+    networks: [myrtle]
+    profiles: [asset_watcher_cn, all_runtime]
+    develop:
+      watch:
+        - action: rebuild
+          path: ./assets/Dockerfile.0
+
+  dps-tools:
+    platform: linux/amd64
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.0
+      target: tools
+    networks: [myrtle]
+    profiles: [dps-tools, tools]
+    volumes:
+      - ./backend:/workspace
+      - ./assets/output:${ASSETS_DIR}:ro
+      - cargo_registry:/usr/local/cargo/registry
+      - pip_cache:/root/.cache/pip
+    env_file: .env
+    environment:
+      ASSETS_DIR: ${ASSETS_DIR}/en
+    command: sh ./scripts/run-dps-tools.sh
+
+  asset-tools:
+    platform: linux/amd64
+    build:
+      context: ./assets
+      dockerfile: Dockerfile.0
+      target: ${ASSET_TOOLS_BUILD_TARGET_OVERRIDE:-dev_env}
+      args:
+        BUILDER_STAGE: ${DOCKER_TARGET}_builder
+    networks: [myrtle]
+    profiles: [asset-tools, tools]
+    volumes:
+      - ./assets:/workspace
+      # - ./assets/ArknightsFlatbuffers:/tmp/ArknightsFlatbuffers
+      - ./assets/ArkAssets:/data/ArkAssets
+      - ./assets/output:${ASSETS_DIR}
+    env_file: .env
+
+volumes:
+    postgres_data:
+    redis_data:
+    backend_target:
+    discord_target:
+    cargo_registry:
+    bun_cache:
+    pip_cache:
+
+networks:
+  myrtle:
+    driver: bridge
